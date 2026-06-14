@@ -1,0 +1,15 @@
+{
+  "speed_limit_kmh": 60,
+  "ear_threshold": 0.25,
+  "drowsy_frame_count": 15,
+  "fines": {
+    "seatbelt": 1000,
+    "phone": 5000,
+    "speed": 2000,
+    "helmet": 1000,
+    "wrong_way": 5000,
+    "drowsiness": 2000
+  },
+  "camera_unit_id": "CAM-DL-001",
+  "mock_gps": "28.6139N, 77.2090E"
+}
