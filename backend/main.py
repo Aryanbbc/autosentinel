@@ -40,7 +40,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:5173", 
         "http://127.0.0.1:5173",
-        "https://autosentinel-tnvc.vercel.app"  # Added your live Vercel URL
+        "https://autosentinel-tnvc.vercel.app"
     ],
     allow_credentials=True, 
     allow_methods=["*"], 
@@ -87,7 +87,6 @@ def create_mock_vehicle_if_missing(plate):
     owner_name, contact, vehicle_type = random.choice(mock_owners)
     insert_vehicle(plate, owner_name, contact, vehicle_type)
 
-# === UPGRADED OMNI-CAM FINE GENERATOR ===
 def create_live_fine(detected_plate, violations):
     config = load_config()
     
@@ -98,7 +97,6 @@ def create_live_fine(detected_plate, violations):
         
     create_mock_vehicle_if_missing(plate)
 
-    # Dynamic Math: Add up the fines for ALL concurrent violations!
     fines_dict = config.get("fines", {"helmet": 1000, "speed": 2000})
     fine_amount = sum(int(fines_dict.get(v, 1000)) for v in violations)
     primary_violation = violations[0] if violations else "helmet"
@@ -176,7 +174,6 @@ async def live_feed(websocket: WebSocket):
                 try:
                     ai_results = detector.process_frame(frame)
                     
-                    # Pass the dynamic Omni-Cam violations to the Database!
                     if ai_results.get("new_alert"):
                         scanned_plate = ai_results.get("plate", "UNKNOWN")
                         active_violations = ai_results.get("violations", ["helmet"])
@@ -199,8 +196,11 @@ async def live_feed(websocket: WebSocket):
             await websocket.send_text(json.dumps(payload))
             await asyncio.sleep(0.03)
             
+    # THE PERMANENT FIX IS HERE:
     except WebSocketDisconnect:
-        pass
+        print("🔌 Client disconnected (User refreshed the page). Waiting for reconnect...")
+    except Exception as e:
+        print(f"⚠️ Unexpected connection drop: {e}")
     finally:
         camera.release()
 
