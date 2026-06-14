@@ -1,11 +1,12 @@
 import React, { useEffect, useRef, useState } from "react";
 import axios from "axios";
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
-const WS_BASE = API_BASE.replace(/^http/, "ws");
+const API_BASE = import.meta.env.VITE_API_BASE_URL;
+const WS_BASE = import.meta.env.VITE_WS_BASE_URL;
+const WS_URL = `${WS_BASE}/ws/live-feed`;
 
 const violationIcons = {
-  seatbelt: "🎗️", 
+  seatbelt: "🎗️",
   phone: "📱",
   speed: "⚡",
   helmet: "🪖",
@@ -48,7 +49,7 @@ function AlertCard({ alert }) {
 
           <div className="mt-2 grid grid-cols-2 gap-2 text-sm">
             <p className="text-gray-400">
-              Plate: <span className="font-bold text-white">{alert.plate}</span>
+              Plate: <span className="font-bold text-white">{alert.plate || "UNKNOWN"}</span>
             </p>
             <p className="text-gray-400">
               Fine:{" "}
@@ -72,7 +73,7 @@ export default function LiveMonitor({ addToast }) {
   const [totalToday, setTotalToday] = useState(0);
   const [finesToday, setFinesToday] = useState(0);
   const [connectionStatus, setConnectionStatus] = useState("CONNECTING");
-  const latestObjectUrl = useRef(null);
+  const wsRef = useRef(null);
 
   const fetchTodayStats = async () => {
     try {
@@ -88,52 +89,80 @@ export default function LiveMonitor({ addToast }) {
         todayRecords.reduce((sum, item) => sum + Number(item.fine_amount || 0), 0)
       );
     } catch {
-      setTotalToday(alerts.length);
-      setFinesToday(
-        alerts.reduce(
-          (sum, item) => sum + Number(item.fine_total || item.fine_amount || 0),
-          0
-        )
-      );
+      setTotalToday(0);
+      setFinesToday(0);
     }
   };
 
   useEffect(() => {
     fetchTodayStats();
 
-    const ws = new WebSocket(`${WS_BASE}/live-feed`);
+    console.log("Connecting WebSocket:", WS_URL);
 
-    ws.onopen = () => setConnectionStatus("LIVE");
-    ws.onerror = () => setConnectionStatus("OFFLINE");
-    ws.onclose = () => setConnectionStatus("DISCONNECTED");
+    const ws = new WebSocket(WS_URL);
+    wsRef.current = ws;
+
+    ws.onopen = () => {
+      console.log("✅ WebSocket connected");
+      setConnectionStatus("CONNECTED");
+    };
+
+    ws.onerror = (error) => {
+      console.error("❌ WebSocket error:", error);
+      setConnectionStatus("ERROR");
+    };
+
+    ws.onclose = () => {
+      console.log("❌ WebSocket closed");
+      setConnectionStatus("DISCONNECTED");
+    };
 
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        
-        // 1. Paint the video frame
-        if (data.image) {
-          setFeedUrl(`data:image/jpeg;base64,${data.image}`);
+
+        // Backend may send "frame" or "image", support both
+        const frameBase64 = data.frame || data.image;
+
+        if (frameBase64) {
+          setFeedUrl(`data:image/jpeg;base64,${frameBase64}`);
         }
-        
-        // 2. If the AI sent a ticket, pop it onto the screen!
+
+        // If backend sends full alert object
         if (data.alert) {
           setAlerts((prev) => [data.alert, ...prev].slice(0, 20));
           setTotalToday((prev) => prev + 1);
           setFinesToday((prev) => prev + Number(data.alert.fine_total || 0));
+          return;
         }
-      } catch (err) {
-        // Fallback for raw text
+
+        // If backend sends new_alert + violations
+        if (data.new_alert && data.violations?.length > 0) {
+          const alert = {
+            violations: data.violations,
+            plate: data.plate || "UNKNOWN",
+            fine_total: data.fine_total || 0,
+            timestamp: new Date().toLocaleString(),
+          };
+
+          setAlerts((prev) => [alert, ...prev].slice(0, 20));
+          setTotalToday((prev) => prev + 1);
+          setFinesToday((prev) => prev + Number(alert.fine_total || 0));
+
+          addToast?.({
+            type: "danger",
+            title: "New violation detected",
+            message: `${alert.plate} • ₹${alert.fine_total}`,
+          });
+        }
+      } catch {
+        // Fallback if backend sends only raw base64 frame
         setFeedUrl(`data:image/jpeg;base64,${event.data}`);
       }
     };
 
     return () => {
       ws.close();
-
-      if (latestObjectUrl.current) {
-        URL.revokeObjectURL(latestObjectUrl.current);
-      }
     };
   }, []);
 
@@ -165,6 +194,13 @@ export default function LiveMonitor({ addToast }) {
     }
   };
 
+  const statusAccent =
+    connectionStatus === "CONNECTED"
+      ? "text-green-400"
+      : connectionStatus === "CONNECTING"
+      ? "text-yellow-400"
+      : "text-red-400";
+
   return (
     <div className="space-y-6">
       <style>
@@ -179,7 +215,7 @@ export default function LiveMonitor({ addToast }) {
       <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
         <StatCard label="Total Today" value={totalToday} />
         <StatCard label="Fines Today" value={`₹${finesToday}`} accent="text-red-400" />
-        <StatCard label="Feed Status" value={connectionStatus} />
+        <StatCard label="Feed Status" value={connectionStatus} accent={statusAccent} />
         <StatCard label="Camera Unit" value="CAM-DL-001" />
       </div>
 
@@ -212,7 +248,7 @@ export default function LiveMonitor({ addToast }) {
                   <div className="mx-auto mb-4 h-16 w-16 animate-pulse rounded-full border border-green-400/40 bg-green-400/10" />
                   <p className="font-mono text-green-400">WAITING FOR LIVE FEED...</p>
                   <p className="mt-2 text-sm text-gray-500">
-                    WebSocket: {WS_BASE}/live-feed
+                    WebSocket: {WS_URL}
                   </p>
                 </div>
               </div>
@@ -242,9 +278,7 @@ export default function LiveMonitor({ addToast }) {
           <div className="max-h-[560px] space-y-3 overflow-y-auto pr-1">
             {alerts.length === 0 ? (
               <div className="rounded-xl border border-gray-800 bg-gray-950/80 p-8 text-center">
-                <p className="font-mono text-sm text-gray-500">
-                  NO ACTIVE ALERTS
-                </p>
+                <p className="font-mono text-sm text-gray-500">NO ACTIVE ALERTS</p>
                 <p className="mt-2 text-xs text-gray-600">
                   Press simulate to test dashboard flow.
                 </p>
@@ -252,7 +286,7 @@ export default function LiveMonitor({ addToast }) {
             ) : (
               alerts.map((alert, index) => (
                 <AlertCard
-                  key={`${alert.case_id || alert.plate}-${index}`}
+                  key={`${alert.case_id || alert.plate || "alert"}-${index}`}
                   alert={alert}
                 />
               ))
